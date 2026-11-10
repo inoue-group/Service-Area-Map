@@ -355,6 +355,8 @@
           <div class="flex items-center gap-3 min-w-0">
             <div id="wardIconBox" class="w-10 h-10 shrink-0 rounded-xl bg-slate-500 text-white flex items-center justify-center font-bold text-base shadow-sm">市</div>
             <div class="min-w-0">
+              <!-- 読み仮名（総務省「全国地方公共団体コード」の読み） -->
+              <p id="currentMuniKana" class="text-[11px] text-slate-500 leading-none tracking-wide mb-0.5"></p>
               <div class="flex items-center gap-2 flex-wrap">
                 <h2 id="currentMuniTitle" class="text-lg font-bold text-slate-900 leading-tight"></h2>
                 <span id="currentMuniBadge" class="text-xs px-2.5 py-0.5 rounded-full font-bold border status-badge-none"></span>
@@ -960,7 +962,7 @@
       return it && it.status ? it.status : 'none';
     }
     function matchesQuery(p, q) {
-      return !q || p.name.includes(q) || p.pref.includes(q) || (p.gun || '').includes(q);
+      return !q || p.name.includes(q) || p.pref.includes(q) || (p.gun || '').includes(q) || (p.kana || '').includes(q);
     }
     function refreshView() {
       const q = document.getElementById('muniSearch').value.trim();
@@ -1324,6 +1326,7 @@
       updateDrawerPanels();
 
       document.getElementById('currentMuniTitle').textContent = p.name;
+      document.getElementById('currentMuniKana').textContent = p.kana || '';
       document.getElementById('currentMuniSub').textContent = [p.pref, p.city || p.gun, muniTypeLabel(p)].filter(Boolean).join('・');
       document.getElementById('wardIconBox').textContent = p.name.slice(-1);
 
@@ -1460,7 +1463,7 @@
     // ===== ボタンなどの動き =====
     function setupInteractions() {
       // 検索候補
-      document.getElementById('muniList').innerHTML = MUNIS.map(p => `<option value="${p.name}">${p.pref}</option>`).join('');
+      document.getElementById('muniList').innerHTML = MUNIS.map(p => `<option value="${p.name}">${p.pref}・${p.kana || ''}</option>`).join('');
       const searchEl = document.getElementById('muniSearch');
       // 検索で見つけた市町村を選ぶ（複数選択中なら選択に追加）
       const pickMuni = (code) => {
@@ -1481,7 +1484,7 @@
         if (e.key !== 'Enter') return;
         e.preventDefault();
         const q = searchEl.value.trim();
-        const hit = MUNIS.find(p => p.name === q) || MUNIS.find(p => p.name.includes(q));
+        const hit = MUNIS.find(p => p.name === q) || MUNIS.find(p => p.name.includes(q)) || MUNIS.find(p => (p.kana || '').startsWith(q));
         if (q && hit) {
           pickMuni(hit.code);
           if (window.innerWidth < 768) openDrawer();
