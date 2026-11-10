@@ -1,0 +1,1446 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>施工エリア判定マップ（東京・埼玉・群馬）</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- 地図の描画（d3・TopoJSON） -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+  <!-- Firebase（保存した内容を全員で共有するため） -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@500;700;800&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+
+  <style>
+    body {
+      font-family: 'Noto Sans JP', 'Hiragino Sans', 'Meiryo', sans-serif;
+    }
+    .brand-font {
+      font-family: 'M PLUS Rounded 1c', sans-serif;
+    }
+
+    /* ===== 地図（白い背景。色分けは元のHTMLと同じ：施工エリア＝緑、エリア外＝赤、未設定＝薄いグレー） ===== */
+    #mapWrap { background: #ffffff; }
+    #mapSvg {
+      display: block;
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+    }
+    #mapSvg:active { cursor: grabbing; }
+    .muni { cursor: pointer; transition: fill .15s, opacity .15s, filter .15s; }
+    .muni.st-none { fill: #f1f5f9; }
+    .muni.st-in { fill: #86efac; }
+    .muni.st-out { fill: #fca5a5; }
+    .muni:hover { filter: brightness(0.93) contrast(1.08); }
+    .muni.dim { opacity: .18; }
+    .muni-borders {
+      fill: none;
+      stroke: #94a3b8;
+      stroke-width: .8;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+      pointer-events: none;
+    }
+    /* さいたま市の区の境（市の境と見分けるため点線） */
+    .ward-borders {
+      fill: none;
+      stroke: #94a3b8;
+      stroke-width: .8;
+      stroke-dasharray: 3 2;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+      pointer-events: none;
+    }
+    /* 施工エリア・エリア外の市町村は、元のHTMLと同じ濃い緑・濃い赤のふちどり */
+    .status-line {
+      fill: none;
+      stroke-width: 1.2;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+      pointer-events: none;
+    }
+    .status-line.st-in { stroke: #15803d; }
+    .status-line.st-out { stroke: #b91c1c; }
+    .status-line.dim { opacity: .18; }
+    .pref-borders {
+      fill: none;
+      stroke: #334155;
+      stroke-width: 2;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+      pointer-events: none;
+    }
+    .hover-line {
+      fill: none;
+      stroke: #2563eb;
+      stroke-width: 2.5;
+      vector-effect: non-scaling-stroke;
+      pointer-events: none;
+    }
+    .sel-line {
+      fill: none;
+      stroke: #1d4ed8;
+      stroke-width: 3.5;
+      vector-effect: non-scaling-stroke;
+      pointer-events: none;
+      filter: drop-shadow(0 0 3px rgba(29, 78, 216, .45));
+    }
+    .bulk-shape {
+      fill: rgba(250, 204, 21, .4);
+      stroke: #ca8a04;
+      stroke-width: 2;
+      vector-effect: non-scaling-stroke;
+      pointer-events: none;
+    }
+    .muni-label {
+      font-family: 'M PLUS Rounded 1c', sans-serif;
+      font-size: 10.5px;
+      font-weight: 700;
+      fill: #475569;
+      paint-order: stroke;
+      stroke: rgba(255, 255, 255, .9);
+      stroke-width: 3px;
+      stroke-linejoin: round;
+      text-anchor: middle;
+      dominant-baseline: central;
+      pointer-events: none;
+    }
+    .muni-label.lab-in { fill: #064e3b; }
+    .muni-label.lab-out { fill: #7f1d1d; }
+    .muni-label.sel { font-size: 13px; fill: #1e3a8a; }
+    .pref-label {
+      font-family: 'M PLUS Rounded 1c', sans-serif;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: .3em;
+      fill: #0f172a;
+      opacity: .4;
+      text-anchor: middle;
+      dominant-baseline: central;
+      pointer-events: none;
+    }
+
+    /* Quick status color classes */
+    .status-badge-in { background-color: #dcfce7; color: #15803d; border-color: #86efac; }
+    .status-badge-out { background-color: #fee2e2; color: #b91c1c; border-color: #fca5a5; }
+    .status-badge-none { background-color: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #f8fafc; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 h-screen flex flex-col overflow-hidden">
+
+  <!-- Header -->
+  <header class="bg-white border-b border-slate-200 px-4 py-2.5 flex items-center justify-between gap-3 shrink-0 shadow-sm z-30">
+    <div class="flex items-center gap-3 min-w-0">
+      <div class="w-10 h-10 shrink-0 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-700 flex items-center justify-center text-white shadow-md shadow-emerald-500/20">
+        <i class="fa-solid fa-helmet-safety text-lg"></i>
+      </div>
+      <div class="min-w-0">
+        <div class="flex items-center gap-2">
+          <h1 class="text-base sm:text-lg font-bold text-slate-900 brand-font truncate">施工エリア判定マップ</h1>
+          <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold hidden sm:inline-block whitespace-nowrap">東京・埼玉・群馬</span>
+        </div>
+        <p class="text-xs text-slate-500 hidden sm:block truncate">市町村をクリックして、施工可否（対応／対象外）の色分けとメモを登録できます</p>
+      </div>
+    </div>
+
+    <!-- Header Actions -->
+    <div class="flex items-center gap-2 shrink-0">
+      <!-- 共有の状態（「共有中」なら保存が全員に反映される） -->
+      <div id="syncBadge" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-bold whitespace-nowrap bg-slate-50 border-slate-200 text-slate-500" title="共有データに接続しています">
+        <span id="syncDot" class="w-2 h-2 rounded-full bg-slate-400 animate-pulse"></span>
+        <span id="syncText">接続中…</span>
+      </div>
+
+      <!-- まとめて設定 -->
+      <button id="bulkBtn" type="button"></button>
+
+      <!-- Export Memo Report -->
+      <button id="exportBtn" type="button" class="px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition" title="施工エリアの一覧をコピー">
+        <i class="fa-solid fa-clipboard-list text-emerald-600"></i>
+        <span class="hidden lg:inline">エリア一覧コピー</span>
+      </button>
+
+      <!-- Toggle Drawer on Mobile -->
+      <button id="toggleMobileDrawer" type="button" class="md:hidden p-2 rounded-lg bg-emerald-600 text-white font-medium text-xs flex items-center gap-1">
+        <i class="fa-solid fa-pen-to-square"></i>
+        <span>設定枠</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main View Area -->
+  <div class="flex-1 flex overflow-hidden relative">
+
+    <!-- Left / Center: Map -->
+    <section class="flex-1 min-w-0 flex flex-col bg-slate-100 p-2 sm:p-4 overflow-hidden relative">
+
+      <!-- Top Summary / Stats Bar -->
+      <div class="bg-white rounded-xl p-3 shadow-md border border-slate-200/90 mb-2 flex flex-wrap items-center justify-between gap-3 shrink-0 z-20">
+
+        <!-- Search -->
+        <div class="relative w-full sm:w-60">
+          <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+          <input type="text" id="muniSearch" list="muniList" autocomplete="off" placeholder="市町村名で探す" title="市町村名を入れてEnterで、その場所へ移動します" class="w-full pl-8 pr-3 py-1.5 rounded-lg text-xs bg-slate-50 border border-slate-200 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition">
+          <datalist id="muniList"></datalist>
+        </div>
+
+        <!-- Counters -->
+        <div class="flex flex-wrap items-center gap-2 text-xs font-semibold">
+          <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-800">
+            <span class="w-3 h-3 rounded-full bg-emerald-500"></span>
+            <span>施工エリア:</span>
+            <span id="countInArea" class="font-bold text-sm text-emerald-900">0</span>
+          </div>
+          <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-50 border border-rose-300 text-rose-800">
+            <span class="w-3 h-3 rounded-full bg-rose-500"></span>
+            <span>エリア外:</span>
+            <span id="countOutArea" class="font-bold text-sm text-rose-900">0</span>
+          </div>
+          <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-300 text-slate-600">
+            <span class="w-3 h-3 rounded-full bg-slate-400"></span>
+            <span>未設定:</span>
+            <span id="countNoneArea" class="font-bold text-sm text-slate-800">0</span>
+          </div>
+        </div>
+
+        <!-- Filter tabs -->
+        <div class="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-[11px] font-medium" id="filterTabs">
+          <button type="button" data-filter="all">すべて</button>
+          <button type="button" data-filter="in">施工可のみ</button>
+          <button type="button" data-filter="out">エリア外のみ</button>
+          <button type="button" data-filter="none">未設定のみ</button>
+        </div>
+      </div>
+
+      <!-- まとめて設定のバー（地図にかぶらないよう、地図の上に出す） -->
+      <div id="bulkBar" class="hidden shrink-0 mb-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-slate-700 shadow-sm">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="font-bold text-amber-700"><i class="fa-solid fa-object-group mr-1"></i>複数選択</span>
+          <span>選択 <b id="bulkCount" class="text-amber-700 text-sm">0</b> 件</span>
+          <span class="text-slate-500 ml-1">都県ごと：</span>
+          <button type="button" class="bulk-pref" data-pref="群馬県">群馬県</button>
+          <button type="button" class="bulk-pref" data-pref="埼玉県">埼玉県</button>
+          <button type="button" class="bulk-pref" data-pref="東京都">東京都</button>
+          <button type="button" id="bulkClearBtn" class="px-2 py-1 rounded-md text-slate-500 hover:text-slate-800 hover:bg-amber-100 transition">選択解除</button>
+          <span class="text-slate-300 hidden sm:inline">｜</span>
+          <span>選んだ市町村を</span>
+          <button type="button" class="bulk-apply px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-sm transition" data-status="in">施工エリアにする</button>
+          <button type="button" class="bulk-apply px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold shadow-sm transition" data-status="out">エリア外にする</button>
+          <button type="button" class="bulk-apply px-2.5 py-1.5 rounded-lg bg-slate-500 hover:bg-slate-600 text-white font-bold shadow-sm transition" data-status="none">未設定にする</button>
+          <button type="button" id="bulkDoneBtn" class="ml-auto px-3 py-1.5 rounded-lg border border-amber-300 bg-white hover:bg-amber-100 font-bold transition">終了</button>
+        </div>
+      </div>
+
+      <!-- Map -->
+      <div id="mapWrap" class="flex-1 min-h-0 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden">
+        <svg id="mapSvg" role="img" aria-label="東京都・埼玉県・群馬県の市町村の地図">
+          <g id="zoomLayer">
+            <g id="muniLayer"></g>
+            <path id="muniBorders" class="muni-borders"></path>
+            <path id="wardBorders" class="ward-borders"></path>
+            <g id="statusLayer"></g>
+            <path id="prefBorders" class="pref-borders"></path>
+            <g id="bulkLayer"></g>
+            <path id="hoverLine" class="hover-line"></path>
+            <path id="selLine" class="sel-line"></path>
+          </g>
+          <g id="labelLayer"></g>
+        </svg>
+
+        <!-- 操作のヒント -->
+        <div class="absolute top-3 left-3 max-w-[calc(100%-80px)] bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-slate-200 text-[11px] text-slate-500 shadow-sm pointer-events-none flex items-center gap-1.5">
+          <i class="fa-regular fa-hand-pointer text-emerald-600"></i>
+          <span id="mapHint">クリックで選択（何もないところで解除）・Shift／Ctrl＋クリックで複数選択</span>
+        </div>
+
+        <!-- 拡大・縮小 -->
+        <div class="absolute top-3 right-3 flex flex-col gap-1.5">
+          <button type="button" id="zoomInBtn" class="w-9 h-9 rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 shadow-sm transition" title="拡大"><i class="fa-solid fa-plus"></i></button>
+          <button type="button" id="zoomOutBtn" class="w-9 h-9 rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 shadow-sm transition" title="縮小"><i class="fa-solid fa-minus"></i></button>
+          <button type="button" id="zoomResetBtn" class="w-9 h-9 rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 shadow-sm transition" title="全体を表示"><i class="fa-solid fa-expand"></i></button>
+        </div>
+
+        <!-- 凡例・出典 -->
+        <div class="absolute bottom-3 left-3 flex flex-wrap items-center gap-3 bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-slate-200 text-[11px] text-slate-600 shadow-sm pointer-events-none">
+          <span class="flex items-center gap-1.5"><i class="inline-block w-3 h-3 rounded-sm border" style="background:#86efac;border-color:#15803d"></i>施工エリア</span>
+          <span class="flex items-center gap-1.5"><i class="inline-block w-3 h-3 rounded-sm border" style="background:#fca5a5;border-color:#b91c1c"></i>エリア外</span>
+          <span class="flex items-center gap-1.5"><i class="inline-block w-3 h-3 rounded-sm border" style="background:#f1f5f9;border-color:#94a3b8"></i>未設定</span>
+        </div>
+        <div class="absolute bottom-3 right-3 text-[10px] text-slate-400 pointer-events-none hidden sm:block">出典：国土数値情報（行政区域データ）を加工して作成</div>
+
+        <!-- マウスを乗せたときの表示 -->
+        <div id="mapTip" class="absolute z-30 pointer-events-none opacity-0 transition-opacity bg-slate-900/90 text-white px-3 py-1.5 rounded-lg text-xs shadow-lg whitespace-nowrap">
+          <div id="mapTipName" class="font-bold"></div>
+          <div id="mapTipSub" class="text-[10px] text-slate-300"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right: 施工メモ枠 -->
+    <aside id="memoDrawer" class="fixed md:static inset-y-0 right-0 w-full sm:w-96 md:w-[400px] bg-white border-l border-slate-200 flex flex-col z-40 transform translate-x-full md:translate-x-0 transition-transform duration-300 shadow-2xl md:shadow-none">
+
+      <!-- 未選択のとき -->
+      <div id="drawerEmpty" class="relative flex-1 flex flex-col items-center justify-center text-center p-8 gap-3">
+        <button type="button" class="close-drawer md:hidden absolute top-3 right-3 text-slate-400 hover:text-slate-700 p-1 rounded-lg">
+          <i class="fa-solid fa-xmark text-lg"></i>
+        </button>
+        <div class="w-14 h-14 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-2xl">
+          <i class="fa-regular fa-hand-pointer"></i>
+        </div>
+        <p class="font-bold text-slate-800">地図から市町村を選んでください</p>
+        <p class="text-xs text-slate-500 leading-relaxed">選んだ市町村の施工可否とメモを、ここで登録できます。<br>左上の検索欄に名前を入れても探せます。</p>
+      </div>
+
+      <!-- 選択中 -->
+      <div id="drawerBody" class="hidden flex-1 flex flex-col min-h-0">
+        <!-- Drawer Header -->
+        <div class="px-5 py-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between shrink-0">
+          <div class="flex items-center gap-3 min-w-0">
+            <div id="wardIconBox" class="w-10 h-10 shrink-0 rounded-xl bg-slate-500 text-white flex items-center justify-center font-bold text-base shadow-sm">市</div>
+            <div class="min-w-0">
+              <div class="flex items-center gap-2 flex-wrap">
+                <h2 id="currentMuniTitle" class="text-lg font-bold text-slate-900 leading-tight"></h2>
+                <span id="currentMuniBadge" class="text-xs px-2.5 py-0.5 rounded-full font-bold border status-badge-none"></span>
+              </div>
+              <p id="currentMuniSub" class="text-[11px] text-slate-500"></p>
+            </div>
+          </div>
+          <button type="button" class="close-drawer md:hidden text-slate-400 hover:text-slate-700 p-1 rounded-lg">
+            <i class="fa-solid fa-xmark text-lg"></i>
+          </button>
+        </div>
+
+        <!-- Structured Construction Memo Form -->
+        <form id="memoForm" class="flex-1 overflow-y-auto p-5 space-y-4">
+
+          <!-- 施工可否トグルボタン (3択) -->
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1.5">
+              <i class="fa-solid fa-toggle-on text-emerald-600 mr-1"></i>施工ステータス（色分け）
+            </label>
+            <div class="grid grid-cols-3 gap-2" id="statusRadioGroup">
+              <button type="button" data-val="in" class="status-btn">
+                <i class="fa-solid fa-circle-check text-base text-emerald-600 mb-1"></i>
+                <span>施工エリア</span>
+                <span class="text-[10px] font-normal text-emerald-600">対応可（緑）</span>
+              </button>
+              <button type="button" data-val="out" class="status-btn">
+                <i class="fa-solid fa-ban text-base text-rose-500 mb-1"></i>
+                <span>エリア外</span>
+                <span class="text-[10px] font-normal text-rose-600">対象外（赤）</span>
+              </button>
+              <button type="button" data-val="none" class="status-btn">
+                <i class="fa-regular fa-circle-question text-base text-slate-400 mb-1"></i>
+                <span>未設定</span>
+                <span class="text-[10px] font-normal text-slate-400">色なし</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 出張費・基本条件枠 -->
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label for="travelFee" class="block text-xs font-bold text-slate-700 mb-1">
+                <i class="fa-solid fa-yen-sign text-amber-500 mr-1"></i>出張費・追加料金
+              </label>
+              <input type="text" id="travelFee" placeholder="例: 無料 / +3,000円" class="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-medium">
+            </div>
+            <div>
+              <label for="leadTime" class="block text-xs font-bold text-slate-700 mb-1">
+                <i class="fa-solid fa-truck text-sky-500 mr-1"></i>最短駆けつけ・工期
+              </label>
+              <input type="text" id="leadTime" placeholder="例: 即日可 / 2〜3日後" class="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-medium">
+            </div>
+          </div>
+
+          <!-- 担当営業所 / 提携業者枠 -->
+          <div>
+            <label for="partnerOffice" class="block text-xs font-bold text-slate-700 mb-1">
+              <i class="fa-regular fa-building text-indigo-500 mr-1"></i>担当支店 / 提携施工店
+            </label>
+            <input type="text" id="partnerOffice" placeholder="例: 熊谷展示場 / 〇〇建工" class="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-medium">
+          </div>
+
+          <!-- 特記事項・注意事項枠 -->
+          <div>
+            <label for="memoNotes" class="block text-xs font-bold text-slate-700 mb-1">
+              <i class="fa-regular fa-clipboard text-slate-700 mr-1"></i>施工メモ・条件・注意事項
+            </label>
+            <textarea id="memoNotes" rows="5" placeholder="・狭小地のため軽トラック搬入が推奨&#10;・コインパーキング代の実費請求あり&#10;・夜間・休日工事対応可能" class="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 leading-relaxed"></textarea>
+          </div>
+
+          <!-- クイックタグ -->
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1.5">
+              <i class="fa-solid fa-tags text-teal-600 mr-1"></i>対応可能種別・特記事項タグ
+            </label>
+            <div class="flex flex-wrap gap-1.5" id="tagPills">
+              <button type="button" data-tag="出張費無料" class="tag-toggle">+出張費無料</button>
+              <button type="button" data-tag="即日対応可" class="tag-toggle">+即日対応可</button>
+              <button type="button" data-tag="夜間工事OK" class="tag-toggle">+夜間工事OK</button>
+              <button type="button" data-tag="大型トラック進入可" class="tag-toggle">+大型搬入可</button>
+              <button type="button" data-tag="要事前現地調査" class="tag-toggle">+要事前下見</button>
+              <button type="button" data-tag="駐車スペース要確認" class="tag-toggle">+駐車場要確認</button>
+            </div>
+          </div>
+
+          <!-- Action Buttons -->
+          <div class="pt-2 flex items-center justify-between gap-2 border-t border-slate-100">
+            <button type="button" id="clearCurrentMemoBtn" class="text-xs px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100 font-medium transition flex items-center gap-1">
+              <i class="fa-regular fa-trash-can"></i>
+              <span>内容クリア</span>
+            </button>
+            <button type="submit" class="text-xs sm:text-sm px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-md shadow-emerald-600/20 transition flex items-center gap-1.5">
+              <i class="fa-solid fa-floppy-disk"></i>
+              <span>設定・メモを保存</span>
+            </button>
+          </div>
+
+          <!-- Last updated -->
+          <p id="updatedTime" class="text-[10px] text-right text-slate-400">最終更新: 未設定</p>
+        </form>
+      </div>
+
+      <!-- 複数選択中 -->
+      <div id="drawerMulti" class="hidden flex-1 flex flex-col min-h-0">
+        <div class="px-5 py-4 border-b border-amber-100 bg-amber-50 flex items-center justify-between shrink-0">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 shrink-0 rounded-xl bg-amber-500 text-white flex items-center justify-center text-base shadow-sm">
+              <i class="fa-solid fa-object-group"></i>
+            </div>
+            <div>
+              <h2 class="text-lg font-bold text-slate-900 leading-tight"><span id="multiCount">0</span>件を選択中</h2>
+              <p class="text-[11px] text-slate-500">地図をクリックして追加・解除できます</p>
+            </div>
+          </div>
+          <button type="button" class="close-drawer md:hidden text-slate-400 hover:text-slate-700 p-1 rounded-lg">
+            <i class="fa-solid fa-xmark text-lg"></i>
+          </button>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-5 space-y-4">
+          <!-- 選んだ市町村 -->
+          <div>
+            <div id="multiChips" class="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto"></div>
+            <p id="multiEmptyNote" class="text-xs text-slate-400">地図で市町村をクリックすると、ここに追加されます。</p>
+          </div>
+
+          <!-- 施工ステータス（まとめて） -->
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1.5">
+              <i class="fa-solid fa-toggle-on text-emerald-600 mr-1"></i>施工ステータス（まとめて変更）
+            </label>
+            <div class="grid grid-cols-3 gap-2">
+              <button type="button" data-val="in" class="multi-status-btn">
+                <i class="fa-solid fa-circle-check text-base text-emerald-600 mb-1"></i>
+                <span>施工エリア</span>
+              </button>
+              <button type="button" data-val="out" class="multi-status-btn">
+                <i class="fa-solid fa-ban text-base text-rose-500 mb-1"></i>
+                <span>エリア外</span>
+              </button>
+              <button type="button" data-val="none" class="multi-status-btn">
+                <i class="fa-regular fa-circle-question text-base text-slate-400 mb-1"></i>
+                <span>未設定</span>
+              </button>
+            </div>
+            <p class="text-[10px] text-slate-400 mt-1">選ばなければ、それぞれ今のままです（もう一度押すと取り消し）</p>
+          </div>
+
+          <!-- 出張費・工期・担当 -->
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label for="multiFee" class="block text-xs font-bold text-slate-700 mb-1">
+                <i class="fa-solid fa-yen-sign text-amber-500 mr-1"></i>出張費・追加料金
+              </label>
+              <input type="text" id="multiFee" placeholder="空欄なら変更しない" class="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-medium">
+            </div>
+            <div>
+              <label for="multiLead" class="block text-xs font-bold text-slate-700 mb-1">
+                <i class="fa-solid fa-truck text-sky-500 mr-1"></i>最短駆けつけ・工期
+              </label>
+              <input type="text" id="multiLead" placeholder="空欄なら変更しない" class="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-medium">
+            </div>
+          </div>
+          <div>
+            <label for="multiOffice" class="block text-xs font-bold text-slate-700 mb-1">
+              <i class="fa-regular fa-building text-indigo-500 mr-1"></i>担当支店 / 提携施工店
+            </label>
+            <input type="text" id="multiOffice" placeholder="空欄なら変更しない" class="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-medium">
+          </div>
+
+          <!-- タグ（追加） -->
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1.5">
+              <i class="fa-solid fa-tags text-teal-600 mr-1"></i>タグを追加
+            </label>
+            <div class="flex flex-wrap gap-1.5" id="multiTagPills"></div>
+          </div>
+
+          <p class="text-[11px] text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 leading-relaxed">空欄の項目と施工メモは、それぞれの市町村の今の内容のまま残ります。</p>
+
+          <div class="pt-2 flex items-center justify-between gap-2 border-t border-slate-100">
+            <button type="button" id="multiClearBtn" class="text-xs px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100 font-medium transition flex items-center gap-1">
+              <i class="fa-solid fa-xmark"></i>
+              <span>選択解除</span>
+            </button>
+            <button type="button" id="multiSaveBtn" class="text-xs sm:text-sm px-5 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-bold shadow-md shadow-amber-500/20 transition flex items-center gap-1.5">
+              <i class="fa-solid fa-floppy-disk"></i>
+              <span>選んだ<span id="multiSaveCount">0</span>件に保存</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- 共有データの読み込み中（読み込みが終わるまで操作できないようにする） -->
+  <div id="loadingOverlay" class="fixed inset-0 z-[70] bg-white/75 flex items-center justify-center">
+    <div class="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-slate-200 shadow-lg text-xs font-bold text-slate-600">
+      <i class="fa-solid fa-spinner fa-spin text-emerald-600"></i>
+      <span>共有データを読み込み中…</span>
+    </div>
+  </div>
+
+  <!-- 確認ダイアログ（まとめて設定の前に表示） -->
+  <div id="confirmModal" class="fixed inset-0 z-[60] bg-slate-900/40 items-center justify-center p-4" style="display:none">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5">
+      <p id="confirmTitle" class="text-sm font-bold text-slate-900 leading-relaxed"></p>
+      <p id="confirmText" class="text-xs text-slate-500 mt-1.5 leading-relaxed"></p>
+      <div class="mt-5 flex justify-end gap-2">
+        <button type="button" id="confirmCancelBtn" class="text-xs px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 font-medium transition">やめる</button>
+        <button type="button" id="confirmOkBtn" class="text-xs px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold transition">実行する</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="fixed bottom-6 right-6 z-50 max-w-[calc(100%-48px)] bg-slate-900 text-white text-xs px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-2 transform translate-y-16 opacity-0 transition duration-300 pointer-events-none">
+    <i class="fa-solid fa-circle-check text-emerald-400"></i>
+    <span id="toastMsg">保存しました</span>
+  </div>
+
+  <!-- 地図データ：国土数値情報（行政区域データ 2025年版）から東京都（島しょ部を除く）・埼玉県・群馬県を加工 -->
+  <script src="map-data.js"></script>
+
+  <!-- Application Logic -->
+  <script>
+    // ===== 地図データ =====
+    const MAP = window.MAP_DATA;
+    const FEATURES = topojson.feature(MAP, MAP.objects.munis).features;
+    const BY_CODE = {};
+    FEATURES.forEach(f => { BY_CODE[f.properties.code] = f; });
+    const MUNIS = FEATURES.map(f => f.properties).sort((a, b) => a.code.localeCompare(b.code));
+    const PREFS = ['群馬県', '埼玉県', '東京都'];
+    // 都県名は、地図の外側（となりの県の位置）に置く
+    const PREF_LABELS = [
+      { text: '群馬県', lon: 139.62, lat: 36.78 },
+      { text: '埼玉県', lon: 138.55, lat: 35.92 },
+      { text: '東京都', lon: 139.22, lat: 35.545 }
+    ];
+    // 市町村の境界線（都県の中）、さいたま市の区の境界線、都県の境界線（外周を含む）
+    const sameCity = (a, b) => !!a.properties.city && a.properties.city === b.properties.city;
+    const MESH_MUNI = topojson.mesh(MAP, MAP.objects.munis, (a, b) => a !== b && a.properties.pref === b.properties.pref && !sameCity(a, b));
+    const MESH_WARD = topojson.mesh(MAP, MAP.objects.munis, (a, b) => a !== b && sameCity(a, b));
+    const MESH_PREF = topojson.mesh(MAP, MAP.objects.munis, (a, b) => a === b || a.properties.pref !== b.properties.pref);
+    const STATUS_TEXT = { in: '施工エリア（対応可）', out: '施工エリア外', none: '未設定' };
+
+    // ===== 共有保存の設定（Firebase Firestore） =====
+    // このアプリ専用の Firebase（Service Area Map）に保存します。
+    // 保存先は「sekouAreaMap / tokyo_saitama_gunma」の1件（市町村コードごとに設定を入れる）。
+    const FIREBASE_CONFIG = {
+      apiKey: 'AIzaSyC1aBXOSQ4cljJx04WeES5hReJkFBepRKg',
+      authDomain: 'service-area-map-cfa30.firebaseapp.com',
+      projectId: 'service-area-map-cfa30',
+      storageBucket: 'service-area-map-cfa30.firebasestorage.app',
+      messagingSenderId: '997378437384',
+      appId: '1:997378437384:web:4dc2c687ac7f5f2ff5bcbd'
+    };
+    const SHARED_COLLECTION = 'sekouAreaMap';
+    const SHARED_DOC_ID = 'tokyo_saitama_gunma';
+
+    // State Variables
+    let currentSelectedId = null;  // 選んでいる市町村のコード
+    let areaData = {};             // { 市町村コード: { status, fee, lead, office, notes, tags, updatedAt } }
+    let selectedStatus = 'none';   // in, out, none
+    let selectedTags = new Set();
+    let currentViewFilter = 'all'; // all, in, out, none
+    const STORAGE_KEY = 'sekou_area_map_v2'; // このブラウザ内の控え（共有に接続できないときの予備）
+    let sharedDoc = null;
+    let syncMode = 'connecting';   // connecting：接続中 / cloud：共有中 / local・error：このブラウザのみ
+    let hasSharedData = false;
+    let formDirty = false;         // 右の入力欄に未保存の変更があるか
+    let shownJson = '';            // 右の入力欄に読み込んだ時点のデータ（他の人の更新に気づくため）
+    let bulkMode = false;          // まとめて設定中か
+    const bulkSel = new Set();     // まとめて設定で選んだ市町村コード
+
+    // ===== 地図の描画 =====
+    const mapWrapEl = document.getElementById('mapWrap');
+    const svg = d3.select('#mapSvg');
+    const zoomLayer = d3.select('#zoomLayer');
+    // 前回の地図と同じ簡易投影（経度方向に cos36.3° をかける）
+    const COS_LAT = Math.cos(36.3 * Math.PI / 180);
+    const projection = d3.geoProjection((x, y) => [x * COS_LAT, y]);
+    let geoPath = d3.geoPath(projection);
+    let W = 800;
+    let H = 600;
+    let zoomT = d3.zoomIdentity;
+    const labelPos = {};
+    const zoom = d3.zoom()
+      .scaleExtent([1, 24])
+      .clickDistance(5)
+      .on('zoom', (ev) => {
+        zoomT = ev.transform;
+        zoomLayer.attr('transform', zoomT);
+        updateLabels();
+      });
+
+    function setupMap() {
+      d3.select('#muniLayer').selectAll('path')
+        .data(FEATURES)
+        .join('path')
+        .attr('class', 'muni st-none')
+        .attr('data-code', f => f.properties.code)
+        .on('click', (ev, f) => onMuniClick(f.properties.code, ev))
+        .on('mouseenter', (ev, f) => showHover(f, ev))
+        .on('mousemove', (ev) => moveTip(ev))
+        .on('mouseleave', hideHover);
+
+      const labels = d3.select('#labelLayer');
+      labels.selectAll('text.pref-label').data(PREF_LABELS).join('text').attr('class', 'pref-label').text(d => d.text);
+      // 地図上の名前は、さいたま市の区は「西区」のように短く出す
+      labels.selectAll('text.muni-label').data(MUNIS).join('text').attr('class', 'muni-label').text(p => p.short || p.name);
+
+      svg.call(zoom).on('dblclick.zoom', null);
+      // 何もないところをクリック → 選択を解除（ドラッグで動かしたときは反応しない）
+      svg.on('click.deselect', (ev) => {
+        if (ev.target.closest && ev.target.closest('#muniLayer path')) return;
+        clearSelection();
+      });
+
+      // 地図の枠の大きさが決まったら（変わったら）描き直す
+      let timer = null;
+      let lastKey = '';
+      new ResizeObserver(() => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          const r = mapWrapEl.getBoundingClientRect();
+          const key = Math.round(r.width) + 'x' + Math.round(r.height);
+          if (r.width > 50 && r.height > 50 && key !== lastKey) {
+            lastKey = key;
+            layoutMap(r.width, r.height);
+          }
+        }, 60);
+      }).observe(mapWrapEl);
+    }
+
+    function layoutMap(w, h) {
+      W = w;
+      H = h;
+      svg.attr('viewBox', `0 0 ${W} ${H}`);
+      projection.fitExtent([[28, 28], [W - 28, H - 44]], { type: 'FeatureCollection', features: FEATURES });
+      geoPath = d3.geoPath(projection);
+      d3.select('#muniLayer').selectAll('path').attr('d', geoPath);
+      d3.select('#statusLayer').selectAll('path').attr('d', geoPath);
+      d3.select('#muniBorders').attr('d', geoPath(MESH_MUNI));
+      d3.select('#wardBorders').attr('d', geoPath(MESH_WARD));
+      d3.select('#prefBorders').attr('d', geoPath(MESH_PREF));
+      FEATURES.forEach(f => {
+        const p = f.properties;
+        const xy = projection([p.lx, p.ly]);
+        labelPos[p.code] = { x: xy[0], y: xy[1], size: Math.sqrt(geoPath.area(f)) };
+      });
+      zoom.extent([[0, 0], [W, H]]).translateExtent([[-W * 0.3, -H * 0.3], [W * 1.3, H * 1.3]]);
+      svg.call(zoom.transform, d3.zoomIdentity);
+      updateSelLine();
+      renderBulk();
+      updateLabels();
+    }
+
+    // 市町村名：拡大して入りきる大きさになったものだけ表示する（選んでいる市町村は常に表示）
+    function updateLabels() {
+      const k = zoomT.k;
+      d3.select('#labelLayer').selectAll('text.muni-label').each(function (p) {
+        const pos = labelPos[p.code];
+        if (!pos) return;
+        const isSel = p.code === currentSelectedId;
+        const fits = pos.size * k >= (p.short || p.name).length * 10 + 8;
+        this.setAttribute('x', zoomT.applyX(pos.x));
+        this.setAttribute('y', zoomT.applyY(pos.y));
+        this.setAttribute('class', 'muni-label lab-' + statusOf(p.code) + (isSel ? ' sel' : ''));
+        this.style.display = fits || isSel ? '' : 'none';
+      });
+      d3.select('#labelLayer').selectAll('text.pref-label').each(function (d) {
+        const xy = projection([d.lon, d.lat]);
+        this.setAttribute('x', zoomT.applyX(xy[0]));
+        this.setAttribute('y', zoomT.applyY(xy[1]));
+        this.style.display = k < 2.4 ? '' : 'none';
+      });
+    }
+
+    function updateSelLine() {
+      const f = currentSelectedId ? BY_CODE[currentSelectedId] : null;
+      d3.select('#selLine').attr('d', f ? geoPath(f) : null);
+    }
+
+    function zoomToMuni(code) {
+      const f = BY_CODE[code];
+      if (!f) return;
+      const [[x0, y0], [x1, y1]] = geoPath.bounds(f);
+      const k = Math.max(1, Math.min(10, 0.5 / Math.max((x1 - x0) / W, (y1 - y0) / H)));
+      const t = d3.zoomIdentity.translate(W / 2, H / 2).scale(k).translate(-(x0 + x1) / 2, -(y0 + y1) / 2);
+      svg.transition().duration(650).call(zoom.transform, t);
+    }
+
+    // マウスを乗せたとき
+    const tipEl = document.getElementById('mapTip');
+    function showHover(f, ev) {
+      d3.select('#hoverLine').attr('d', geoPath(f));
+      const p = f.properties;
+      document.getElementById('mapTipName').textContent = p.name;
+      document.getElementById('mapTipSub').textContent = `${p.pref}・${STATUS_TEXT[statusOf(p.code)]}`;
+      tipEl.style.opacity = '1';
+      moveTip(ev);
+    }
+    function moveTip(ev) {
+      const r = mapWrapEl.getBoundingClientRect();
+      let x = ev.clientX - r.left + 14;
+      let y = ev.clientY - r.top + 14;
+      if (x > r.width - 170) x -= 190;
+      if (y > r.height - 60) y -= 70;
+      tipEl.style.left = x + 'px';
+      tipEl.style.top = y + 'px';
+    }
+    function hideHover() {
+      d3.select('#hoverLine').attr('d', null);
+      tipEl.style.opacity = '0';
+    }
+
+    // 選択をすべて外す（保存していない入力があるときは確認する）
+    function clearSelection() {
+      if (bulkMode) setBulkMode(false);
+      if (!currentSelectedId) return;
+      const doClear = () => {
+        currentSelectedId = null;
+        formDirty = false;
+        shownJson = '';
+        updateSelLine();
+        updateLabels();
+        updateDrawerPanels();
+      };
+      if (formDirty) {
+        askConfirm('保存していない入力があります。選択を解除しますか？', doClear, '解除すると、入力した内容は保存されません。');
+      } else {
+        doClear();
+      }
+    }
+
+    function onMuniClick(code, ev) {
+      // Shift／Ctrl（Macは⌘）を押しながらクリック → 複数選択
+      if (!bulkMode && ev && (ev.shiftKey || ev.ctrlKey || ev.metaKey)) {
+        const keep = currentSelectedId;
+        setBulkMode(true);
+        if (keep && keep !== code) bulkSel.add(keep);
+      }
+      if (bulkMode) {
+        toggleBulk(code);
+        return;
+      }
+      selectMunicipality(code);
+      if (window.innerWidth < 768) openDrawer();
+    }
+
+    // ===== 色・件数・絞り込み =====
+    function statusOf(code) {
+      const it = areaData[code];
+      return it && it.status ? it.status : 'none';
+    }
+    function matchesQuery(p, q) {
+      return !q || p.name.includes(q) || p.pref.includes(q) || (p.gun || '').includes(q);
+    }
+    function refreshView() {
+      const q = document.getElementById('muniSearch').value.trim();
+      const isShown = p => {
+        const st = statusOf(p.code);
+        return (currentViewFilter === 'all' || st === currentViewFilter) && matchesQuery(p, q);
+      };
+      d3.select('#muniLayer').selectAll('path').attr('class', f => {
+        const p = f.properties;
+        return 'muni st-' + statusOf(p.code) + (isShown(p) ? '' : ' dim');
+      });
+      // 施工エリア・エリア外のふちどり
+      d3.select('#statusLayer').selectAll('path')
+        .data(FEATURES.filter(f => statusOf(f.properties.code) !== 'none'), f => f.properties.code)
+        .join('path')
+        .attr('d', geoPath)
+        .attr('class', f => 'status-line st-' + statusOf(f.properties.code) + (isShown(f.properties) ? '' : ' dim'));
+      updateStatsCounter();
+      updateLabels();
+    }
+    function updateStatsCounter() {
+      let inCount = 0;
+      let outCount = 0;
+      let noneCount = 0;
+      MUNIS.forEach(p => {
+        const st = statusOf(p.code);
+        if (st === 'in') inCount++;
+        else if (st === 'out') outCount++;
+        else noneCount++;
+      });
+      document.getElementById('countInArea').textContent = inCount;
+      document.getElementById('countOutArea').textContent = outCount;
+      document.getElementById('countNoneArea').textContent = noneCount;
+    }
+
+    // ===== このブラウザ内の控え =====
+    function readLocal() {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        return saved ? JSON.parse(saved) : null;
+      } catch (e) {
+        return null;
+      }
+    }
+    function writeLocal() {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(areaData));
+      } catch (e) {}
+    }
+
+    // キーの順番に左右されない比較用の文字列
+    function stableJson(v) {
+      if (Array.isArray(v)) return '[' + v.map(stableJson).join(',') + ']';
+      if (v && typeof v === 'object') {
+        return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + stableJson(v[k])).join(',') + '}';
+      }
+      return JSON.stringify(v === undefined ? null : v);
+    }
+
+    // ===== 共有データへの接続 =====
+    function connectShared() {
+      if (!window.firebase || !FIREBASE_CONFIG.projectId) {
+        setSyncState('local');
+        hideLoading();
+        return;
+      }
+      try {
+        if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+        sharedDoc = firebase.firestore().collection(SHARED_COLLECTION).doc(SHARED_DOC_ID);
+      } catch (e) {
+        console.error(e);
+        setSyncState('error');
+        hideLoading();
+        return;
+      }
+
+      // しばらくつながらないときは、このブラウザの控えで表示しておく（後でつながれば自動で切り替わる）
+      const waitTimer = setTimeout(() => {
+        if (syncMode === 'connecting') {
+          setSyncState('error');
+          hideLoading();
+          showToast('共有データに接続できません。保存はこのブラウザにだけ残ります');
+        }
+      }, 15000);
+
+      // 誰かが保存するたびに呼ばれ、開いている全員の画面が最新になる
+      sharedDoc.onSnapshot(snap => {
+        if (!snap.exists && snap.metadata.fromCache) return;
+        clearTimeout(waitTimer);
+        applySharedData(snap.exists ? ((snap.data() || {}).areas || {}) : {});
+        setSyncState('cloud');
+        hideLoading();
+      }, err => {
+        clearTimeout(waitTimer);
+        console.error(err);
+        setSyncState('error');
+        hideLoading();
+        showToast('共有データに接続できません。保存はこのブラウザにだけ残ります');
+      });
+    }
+
+    // 共有データを受け取ったとき（自分の保存・他の人の保存のどちらでも）
+    function applySharedData(areas) {
+      areaData = areas;
+      writeLocal();
+      refreshView();
+      if (currentSelectedId) {
+        // 右の入力欄：入力途中でなければ最新の内容に入れ替える
+        const latest = stableJson(areaData[currentSelectedId] || null);
+        if (latest !== shownJson) {
+          if (!formDirty) {
+            selectMunicipality(currentSelectedId);
+          } else if (hasSharedData) {
+            showToast(`他の人が「${BY_CODE[currentSelectedId].properties.name}」を更新しました。保存するとこの入力内容で上書きされます`);
+            shownJson = latest;
+          }
+        }
+      }
+      hasSharedData = true;
+    }
+
+    // 保存（changes は { 市町村コード: 設定内容 }）。共有中なら全員に反映される
+    function saveAreas(changes, doneMsg) {
+      if (syncMode === 'connecting') {
+        showToast('共有データに接続中です。少し待ってからもう一度お試しください');
+        return false;
+      }
+      Object.assign(areaData, changes);
+      writeLocal();
+      refreshView();
+      if (syncMode === 'cloud' && sharedDoc) {
+        sharedDoc.set({
+          areas: changes,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true }).catch(err => {
+          console.error(err);
+          showToast('共有データへの保存に失敗しました。もう一度保存してください');
+        });
+        showToast(`${doneMsg}（全員に反映されます）`);
+      } else {
+        showToast(`${doneMsg}（共有に接続できていないため、このブラウザにだけ保存しました）`);
+      }
+      return true;
+    }
+
+    // 画面右上の「共有中」などの表示
+    function setSyncState(mode) {
+      syncMode = mode;
+      const s = {
+        connecting: { box: 'bg-slate-50 border-slate-200 text-slate-500', dot: 'bg-slate-400 animate-pulse', text: '接続中…', tip: '共有データに接続しています' },
+        cloud: { box: 'bg-emerald-50 border-emerald-300 text-emerald-700', dot: 'bg-emerald-500', text: '共有中', tip: '保存した内容は全員の画面に反映されます' },
+        local: { box: 'bg-amber-50 border-amber-300 text-amber-700', dot: 'bg-amber-500', text: '未共有', tip: '共有の仕組みを読み込めませんでした。保存はこのブラウザにだけ残ります' },
+        error: { box: 'bg-rose-50 border-rose-300 text-rose-700', dot: 'bg-rose-500', text: '共有エラー', tip: '共有データに接続できません。保存はこのブラウザにだけ残ります' }
+      }[mode];
+      const badge = document.getElementById('syncBadge');
+      badge.className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-bold whitespace-nowrap ' + s.box;
+      badge.title = s.tip;
+      document.getElementById('syncDot').className = 'w-2 h-2 rounded-full ' + s.dot;
+      document.getElementById('syncText').textContent = s.text;
+    }
+
+    function hideLoading() {
+      document.getElementById('loadingOverlay').style.display = 'none';
+    }
+
+    // 確認ダイアログ
+    let confirmAction = null;
+    function askConfirm(title, onOk, text) {
+      confirmAction = onOk;
+      document.getElementById('confirmTitle').textContent = title;
+      document.getElementById('confirmText').textContent = text || (syncMode === 'cloud'
+        ? '共有中のため、全員の画面に反映されます。入力済みのメモはそのまま残ります。'
+        : 'このブラウザの表示だけが変わります。');
+      document.getElementById('confirmModal').style.display = 'flex';
+    }
+    function closeConfirm() {
+      document.getElementById('confirmModal').style.display = 'none';
+      confirmAction = null;
+    }
+
+    // ===== まとめて設定 =====
+    const BULK_BTN_OFF = 'px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition';
+    const BULK_BTN_ON = 'px-2.5 py-1.5 rounded-lg border border-yellow-400 bg-yellow-300 text-slate-900 text-xs font-bold flex items-center gap-1.5 transition';
+    function setBulkMode(on) {
+      bulkMode = on;
+      bulkSel.clear();
+      renderBulk();
+      hideHover();
+      document.getElementById('bulkBar').classList.toggle('hidden', !on);
+      const btn = document.getElementById('bulkBtn');
+      btn.className = on ? BULK_BTN_ON : BULK_BTN_OFF;
+      btn.innerHTML = on
+        ? '<i class="fa-solid fa-xmark"></i><span class="hidden sm:inline">複数選択を終了</span>'
+        : '<i class="fa-solid fa-object-group text-amber-500"></i><span class="hidden sm:inline">複数選択</span>';
+      document.getElementById('mapHint').textContent = on
+        ? 'クリックした市町村が選ばれます（もう一度クリックで外れる・何もないところで全部解除）'
+        : 'クリックで選択（何もないところで解除）・Shift／Ctrl＋クリックで複数選択';
+      resetMultiForm();
+      updateDrawerPanels();
+    }
+
+    // 右の枠：未選択／1件／複数選択のどれを出すか
+    function updateDrawerPanels() {
+      document.getElementById('drawerMulti').classList.toggle('hidden', !bulkMode);
+      document.getElementById('drawerBody').classList.toggle('hidden', bulkMode || !currentSelectedId);
+      document.getElementById('drawerEmpty').classList.toggle('hidden', bulkMode || !!currentSelectedId);
+    }
+
+    // 複数選択の入力欄
+    let multiStatus = null;       // null のときは変更しない
+    const multiTags = new Set();  // 追加するタグ
+    function resetMultiForm() {
+      multiStatus = null;
+      multiTags.clear();
+      ['multiFee', 'multiLead', 'multiOffice'].forEach(id => { document.getElementById(id).value = ''; });
+      updateMultiStatusUI();
+      updateMultiTagsUI();
+    }
+    function updateMultiStatusUI() {
+      const base = 'multi-status-btn flex flex-col items-center justify-center py-2.5 px-2 rounded-xl font-bold text-xs transition ';
+      document.querySelectorAll('.multi-status-btn').forEach(btn => {
+        const val = btn.dataset.val;
+        btn.className = base + (val === multiStatus
+          ? { in: 'border-2 border-emerald-500 bg-emerald-50 text-emerald-800 shadow-sm', out: 'border-2 border-rose-500 bg-rose-50 text-rose-800 shadow-sm', none: 'border-2 border-slate-400 bg-slate-100 text-slate-800 shadow-sm' }[val]
+          : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50');
+      });
+    }
+    function updateMultiTagsUI() {
+      document.querySelectorAll('.multi-tag').forEach(btn => {
+        btn.className = multiTags.has(btn.dataset.tag)
+          ? 'multi-tag text-[11px] px-2.5 py-1 rounded-full border border-teal-500 bg-teal-50 text-teal-800 font-bold transition'
+          : 'multi-tag text-[11px] px-2.5 py-1 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50 transition';
+      });
+    }
+    function renderMultiPanel() {
+      const codes = [...bulkSel].sort();
+      document.getElementById('multiCount').textContent = codes.length;
+      document.getElementById('multiSaveCount').textContent = codes.length;
+      document.getElementById('multiEmptyNote').classList.toggle('hidden', codes.length > 0);
+      const st = { in: 'border-emerald-300 bg-emerald-50 text-emerald-800', out: 'border-rose-300 bg-rose-50 text-rose-800', none: 'border-slate-200 bg-white text-slate-700' };
+      document.getElementById('multiChips').innerHTML = codes.map(code => {
+        const p = BY_CODE[code].properties;
+        return `<button type="button" data-code="${code}" class="multi-chip text-[11px] px-2 py-1 rounded-full border ${st[statusOf(code)]} hover:opacity-70 transition" title="クリックで外す">${p.name}<i class="fa-solid fa-xmark ml-1 opacity-60"></i></button>`;
+      }).join('');
+    }
+    function saveMulti() {
+      if (!bulkSel.size) {
+        showToast('先に地図で市町村を選んでください');
+        return;
+      }
+      const fee = document.getElementById('multiFee').value.trim();
+      const lead = document.getElementById('multiLead').value.trim();
+      const office = document.getElementById('multiOffice').value.trim();
+      const tagsAdd = [...multiTags];
+      if (!multiStatus && !fee && !lead && !office && !tagsAdd.length) {
+        showToast('変更する内容を選ぶか入力してください');
+        return;
+      }
+      const n = bulkSel.size;
+      askConfirm(`選んだ${n}件の市町村に保存しますか？`, () => {
+        const today = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' });
+        const changes = {};
+        bulkSel.forEach(code => {
+          const cur = areaData[code] || {};
+          changes[code] = {
+            status: multiStatus || cur.status || 'none',
+            fee: fee || cur.fee || '',
+            lead: lead || cur.lead || '',
+            office: office || cur.office || '',
+            notes: cur.notes || '',
+            tags: Array.from(new Set([...(cur.tags || []), ...tagsAdd])),
+            updatedAt: today
+          };
+        });
+        if (saveAreas(changes, `${n}件の市町村に保存しました`)) {
+          bulkSel.clear();
+          resetMultiForm();
+          renderBulk();
+          if (currentSelectedId) selectMunicipality(currentSelectedId);
+        }
+      });
+    }
+    function toggleBulk(code) {
+      if (bulkSel.has(code)) bulkSel.delete(code);
+      else bulkSel.add(code);
+      renderBulk();
+    }
+    function togglePrefBulk(pref) {
+      const codes = MUNIS.filter(p => p.pref === pref).map(p => p.code);
+      const all = codes.every(c => bulkSel.has(c));
+      codes.forEach(c => (all ? bulkSel.delete(c) : bulkSel.add(c)));
+      renderBulk();
+    }
+    function renderBulk() {
+      d3.select('#bulkLayer').selectAll('path')
+        .data([...bulkSel].map(c => BY_CODE[c]).filter(Boolean), f => f.properties.code)
+        .join('path')
+        .attr('class', 'bulk-shape')
+        .attr('d', geoPath);
+      document.getElementById('bulkCount').textContent = bulkSel.size;
+      document.querySelectorAll('.bulk-pref').forEach(b => {
+        const codes = MUNIS.filter(p => p.pref === b.dataset.pref).map(p => p.code);
+        const all = codes.length > 0 && codes.every(c => bulkSel.has(c));
+        b.className = 'bulk-pref px-2 py-1 rounded-md border font-bold transition ' +
+          (all ? 'bg-amber-400 border-amber-400 text-slate-900' : 'bg-white border-amber-300 text-slate-700 hover:bg-amber-100');
+      });
+      renderMultiPanel();
+    }
+    function applyBulk(status) {
+      if (!bulkSel.size) {
+        showToast('先に地図で市町村を選んでください');
+        return;
+      }
+      const n = bulkSel.size;
+      const label = STATUS_TEXT[status];
+      askConfirm(`選んだ${n}件の市町村を「${label}」にしますか？`, () => {
+        const today = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' });
+        const changes = {};
+        bulkSel.forEach(code => {
+          changes[code] = { ...(areaData[code] || {}), status, updatedAt: today };
+        });
+        if (saveAreas(changes, `${n}件の市町村を「${label}」にしました`)) {
+          bulkSel.clear();
+          renderBulk();
+          if (currentSelectedId) selectMunicipality(currentSelectedId);
+        }
+      });
+    }
+
+    // ===== 右の設定枠 =====
+    function muniTypeLabel(p) {
+      const last = p.name.slice(-1);
+      if (p.city) return '区';
+      if (p.pref === '東京都' && last === '区') return '特別区';
+      return { 市: '市', 町: '町', 村: '村' }[last] || '';
+    }
+
+    function selectMunicipality(code) {
+      const f = BY_CODE[code];
+      if (!f) return;
+      const p = f.properties;
+      currentSelectedId = code;
+      updateDrawerPanels();
+
+      document.getElementById('currentMuniTitle').textContent = p.name;
+      document.getElementById('currentMuniSub').textContent = [p.pref, p.city || p.gun, muniTypeLabel(p)].filter(Boolean).join('・');
+      document.getElementById('wardIconBox').textContent = p.name.slice(-1);
+
+      const current = areaData[code] || { status: 'none', fee: '', lead: '', office: '', notes: '', tags: [] };
+      selectedStatus = current.status || 'none';
+      updateHeaderBadge(selectedStatus);
+
+      document.getElementById('travelFee').value = current.fee || '';
+      document.getElementById('leadTime').value = current.lead || '';
+      document.getElementById('partnerOffice').value = current.office || '';
+      document.getElementById('memoNotes').value = current.notes || '';
+      document.getElementById('updatedTime').textContent = current.updatedAt ? `最終更新: ${current.updatedAt}` : '最終更新: 未設定';
+
+      updateStatusButtonsUI(selectedStatus);
+      selectedTags = new Set(current.tags || []);
+      updateTagPillsUI();
+
+      // 入力欄は保存済みの内容と同じ状態
+      formDirty = false;
+      shownJson = stableJson(areaData[code] || null);
+
+      updateSelLine();
+      updateLabels();
+    }
+
+    function updateHeaderBadge(status) {
+      const badge = document.getElementById('currentMuniBadge');
+      const box = document.getElementById('wardIconBox');
+      if (status === 'in') {
+        badge.className = 'text-xs px-2.5 py-0.5 rounded-full font-bold border status-badge-in';
+        badge.innerHTML = '<i class="fa-solid fa-circle-check mr-1"></i>施工エリア (対応可)';
+        box.style.backgroundColor = '#16a34a';
+      } else if (status === 'out') {
+        badge.className = 'text-xs px-2.5 py-0.5 rounded-full font-bold border status-badge-out';
+        badge.innerHTML = '<i class="fa-solid fa-ban mr-1"></i>施工エリア外 (不可)';
+        box.style.backgroundColor = '#dc2626';
+      } else {
+        badge.className = 'text-xs px-2.5 py-0.5 rounded-full font-bold border status-badge-none';
+        badge.innerHTML = '<i class="fa-regular fa-circle-question mr-1"></i>未設定';
+        box.style.backgroundColor = '#64748b';
+      }
+    }
+
+    function updateStatusButtonsUI(status) {
+      const base = 'status-btn flex flex-col items-center justify-center py-2.5 px-2 rounded-xl font-bold text-xs transition ';
+      document.querySelectorAll('.status-btn').forEach(btn => {
+        const val = btn.dataset.val;
+        if (val === status) {
+          btn.className = base + {
+            in: 'border-2 border-emerald-500 bg-emerald-50 text-emerald-800 shadow-sm',
+            out: 'border-2 border-rose-500 bg-rose-50 text-rose-800 shadow-sm',
+            none: 'border-2 border-slate-400 bg-slate-100 text-slate-800 shadow-sm'
+          }[val];
+        } else {
+          btn.className = base + 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50';
+        }
+      });
+    }
+
+    function updateTagPillsUI() {
+      document.querySelectorAll('.tag-toggle').forEach(btn => {
+        btn.className = selectedTags.has(btn.dataset.tag)
+          ? 'tag-toggle text-[11px] px-2.5 py-1 rounded-full border border-teal-500 bg-teal-50 text-teal-800 font-bold transition'
+          : 'tag-toggle text-[11px] px-2.5 py-1 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50 transition';
+      });
+    }
+
+    function setFilterTabs() {
+      document.querySelectorAll('#filterTabs button').forEach(b => {
+        b.className = b.dataset.filter === currentViewFilter
+          ? 'px-2 py-1 rounded bg-white text-slate-800 font-bold shadow-sm transition'
+          : 'px-2 py-1 rounded text-slate-600 hover:text-slate-900 transition';
+      });
+    }
+
+    const drawer = document.getElementById('memoDrawer');
+    function openDrawer() { drawer.classList.remove('translate-x-full'); }
+    function closeDrawer() { drawer.classList.add('translate-x-full'); }
+
+    // ===== エリア一覧（テキスト）を作る =====
+    function buildReport() {
+      const lines = ['【施工エリア一覧（東京都・埼玉県・群馬県）】', `作成日: ${new Date().toLocaleDateString('ja-JP')}`, ''];
+      [['in', '■ 施工エリア（対応可）'], ['out', '■ 施工エリア外（対応不可）']].forEach(([st, title]) => {
+        const list = MUNIS.filter(p => statusOf(p.code) === st);
+        lines.push(`${title}　計${list.length}市町村`);
+        if (!list.length) lines.push('なし');
+        PREFS.forEach(pref => {
+          const items = list.filter(p => p.pref === pref);
+          if (!items.length) return;
+          lines.push(`［${pref}］`);
+          items.forEach(p => {
+            const it = areaData[p.code] || {};
+            const fee = it.fee ? ` [出張費: ${it.fee}]` : '';
+            const office = it.office ? ` [担当: ${it.office}]` : '';
+            const notes = it.notes ? ` (メモ: ${it.notes.replace(/\s*\n\s*/g, ' ')})` : '';
+            lines.push(`・${p.name}${fee}${office}${notes}`);
+          });
+        });
+        lines.push('');
+      });
+      const none = MUNIS.filter(p => statusOf(p.code) === 'none');
+      lines.push(`■ 未設定　計${none.length}市町村`);
+      PREFS.forEach(pref => {
+        const items = none.filter(p => p.pref === pref);
+        if (items.length) lines.push(`［${pref}］${items.map(p => p.name).join('、')}`);
+      });
+      return lines.join('\n');
+    }
+
+    function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text);
+      }
+      return new Promise((resolve, reject) => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+          document.execCommand('copy') ? resolve() : reject(new Error('copy failed'));
+        } catch (err) {
+          reject(err);
+        }
+        document.body.removeChild(ta);
+      });
+    }
+
+    // ===== ボタンなどの動き =====
+    function setupInteractions() {
+      // 検索候補
+      document.getElementById('muniList').innerHTML = MUNIS.map(p => `<option value="${p.name}">${p.pref}</option>`).join('');
+      const searchEl = document.getElementById('muniSearch');
+      // 検索で見つけた市町村を選ぶ（複数選択中なら選択に追加）
+      const pickMuni = (code) => {
+        if (bulkMode) {
+          bulkSel.add(code);
+          renderBulk();
+        } else {
+          selectMunicipality(code);
+        }
+        zoomToMuni(code);
+      };
+      searchEl.addEventListener('input', () => {
+        refreshView();
+        const exact = MUNIS.find(p => p.name === searchEl.value.trim());
+        if (exact) pickMuni(exact.code);
+      });
+      searchEl.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const q = searchEl.value.trim();
+        const hit = MUNIS.find(p => p.name === q) || MUNIS.find(p => p.name.includes(q));
+        if (q && hit) {
+          pickMuni(hit.code);
+          if (window.innerWidth < 768) openDrawer();
+        }
+      });
+
+      // 絞り込み
+      document.querySelectorAll('#filterTabs button').forEach(b => {
+        b.addEventListener('click', () => {
+          currentViewFilter = b.dataset.filter;
+          setFilterTabs();
+          refreshView();
+        });
+      });
+      setFilterTabs();
+
+      // 拡大・縮小
+      document.getElementById('zoomInBtn').onclick = () => svg.transition().duration(300).call(zoom.scaleBy, 1.6);
+      document.getElementById('zoomOutBtn').onclick = () => svg.transition().duration(300).call(zoom.scaleBy, 1 / 1.6);
+      document.getElementById('zoomResetBtn').onclick = () => svg.transition().duration(450).call(zoom.transform, d3.zoomIdentity);
+
+      // 複数選択
+      document.getElementById('multiTagPills').innerHTML = [...document.querySelectorAll('#tagPills .tag-toggle')]
+        .map(b => `<button type="button" data-tag="${b.dataset.tag}" class="multi-tag">${b.textContent}</button>`).join('');
+      document.querySelectorAll('.multi-tag').forEach(btn => {
+        btn.onclick = () => {
+          if (multiTags.has(btn.dataset.tag)) multiTags.delete(btn.dataset.tag);
+          else multiTags.add(btn.dataset.tag);
+          updateMultiTagsUI();
+        };
+      });
+      document.querySelectorAll('.multi-status-btn').forEach(btn => {
+        btn.onclick = () => {
+          multiStatus = multiStatus === btn.dataset.val ? null : btn.dataset.val;
+          updateMultiStatusUI();
+        };
+      });
+      document.getElementById('multiChips').addEventListener('click', (e) => {
+        const chip = e.target.closest('.multi-chip');
+        if (chip) toggleBulk(chip.dataset.code);
+      });
+      document.getElementById('multiClearBtn').onclick = () => { bulkSel.clear(); renderBulk(); };
+      document.getElementById('multiSaveBtn').onclick = saveMulti;
+      setBulkMode(false);
+      document.getElementById('bulkBtn').onclick = () => {
+        if (bulkMode) {
+          setBulkMode(false);
+          return;
+        }
+        const keep = currentSelectedId;
+        setBulkMode(true);
+        if (keep) {
+          bulkSel.add(keep);
+          renderBulk();
+        }
+      };
+      document.getElementById('bulkDoneBtn').onclick = () => setBulkMode(false);
+      document.getElementById('bulkClearBtn').onclick = () => { bulkSel.clear(); renderBulk(); };
+      document.querySelectorAll('.bulk-pref').forEach(b => { b.onclick = () => togglePrefBulk(b.dataset.pref); });
+      document.querySelectorAll('.bulk-apply').forEach(b => { b.onclick = () => applyBulk(b.dataset.status); });
+
+      // 確認ダイアログ
+      document.getElementById('confirmCancelBtn').onclick = closeConfirm;
+      document.getElementById('confirmOkBtn').onclick = () => {
+        const fn = confirmAction;
+        closeConfirm();
+        if (fn) fn();
+      };
+      document.getElementById('confirmModal').addEventListener('click', (e) => {
+        if (e.target.id === 'confirmModal') closeConfirm();
+      });
+
+      // 入力したら「未保存の変更あり」にする（他の人の更新で入力途中の内容を消さないため）
+      ['travelFee', 'leadTime', 'partnerOffice', 'memoNotes'].forEach(fid => {
+        document.getElementById(fid).addEventListener('input', () => { formDirty = true; });
+      });
+
+      // ステータス
+      document.querySelectorAll('.status-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          selectedStatus = btn.dataset.val;
+          formDirty = true;
+          updateStatusButtonsUI(selectedStatus);
+          updateHeaderBadge(selectedStatus);
+        });
+      });
+      updateStatusButtonsUI('none');
+
+      // タグ
+      document.querySelectorAll('.tag-toggle').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const tag = btn.dataset.tag;
+          if (selectedTags.has(tag)) selectedTags.delete(tag);
+          else selectedTags.add(tag);
+          formDirty = true;
+          updateTagPillsUI();
+        });
+      });
+      updateTagPillsUI();
+
+      // 保存
+      document.getElementById('memoForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        if (!currentSelectedId) return;
+        const dateStr = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' });
+        const entry = {
+          status: selectedStatus,
+          fee: document.getElementById('travelFee').value.trim(),
+          lead: document.getElementById('leadTime').value.trim(),
+          office: document.getElementById('partnerOffice').value.trim(),
+          notes: document.getElementById('memoNotes').value.trim(),
+          tags: Array.from(selectedTags),
+          updatedAt: dateStr
+        };
+        const name = BY_CODE[currentSelectedId].properties.name;
+        if (!saveAreas({ [currentSelectedId]: entry }, `「${name}」の施工条件・メモを保存しました`)) return;
+        formDirty = false;
+        shownJson = stableJson(entry);
+        document.getElementById('updatedTime').textContent = `最終更新: ${dateStr}`;
+      });
+
+      // 内容クリア
+      document.getElementById('clearCurrentMemoBtn').addEventListener('click', () => {
+        document.getElementById('travelFee').value = '';
+        document.getElementById('leadTime').value = '';
+        document.getElementById('partnerOffice').value = '';
+        document.getElementById('memoNotes').value = '';
+        selectedTags.clear();
+        formDirty = true;
+        updateTagPillsUI();
+        showToast('入力項目をクリアしました（保存すると反映されます）');
+      });
+
+      // 一覧コピー
+      document.getElementById('exportBtn').onclick = () => {
+        copyText(buildReport())
+          .then(() => showToast('施工エリアの一覧をコピーしました'))
+          .catch(() => showToast('コピーできませんでした'));
+      };
+
+      // スマホの設定枠
+      document.getElementById('toggleMobileDrawer').onclick = openDrawer;
+      document.querySelectorAll('.close-drawer').forEach(b => { b.onclick = closeDrawer; });
+    }
+
+    // Helper Toast
+    let toastTimer;
+    function showToast(text) {
+      const toast = document.getElementById('toast');
+      document.getElementById('toastMsg').textContent = text;
+      toast.classList.remove('translate-y-16', 'opacity-0');
+      toast.classList.add('translate-y-0', 'opacity-100');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        toast.classList.remove('translate-y-0', 'opacity-100');
+        toast.classList.add('translate-y-16', 'opacity-0');
+      }, 2800);
+    }
+
+    // Initialization
+    window.addEventListener('DOMContentLoaded', () => {
+      areaData = readLocal() || {};
+      setupMap();
+      setupInteractions();
+      refreshView();
+      connectShared();
+    });
+  </script>
+</body>
+</html>
