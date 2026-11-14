@@ -58,6 +58,21 @@
       vector-effect: non-scaling-stroke;
       pointer-events: none;
     }
+    /* 管轄の色で塗ったときの境界線：白いふち＋濃い芯の二重線にして、濃い色・薄い色のどちらの上でも見えるようにする */
+    .muni-borders-case, .ward-borders-case {
+      display: none;
+      fill: none;
+      stroke: #fff;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+      pointer-events: none;
+    }
+    .muni-borders-case { stroke-width: 2.4; stroke-opacity: .95; }
+    .ward-borders-case { stroke-width: 2; stroke-opacity: .9; }
+    .color-base .muni-borders-case, .color-base .ward-borders-case { display: inline; }
+    .color-base .muni-borders { stroke: #1e293b; stroke-opacity: .7; stroke-width: .8; }
+    .color-base .ward-borders { stroke: #1e293b; stroke-opacity: .7; }
+
     /* さいたま市の区の境（市の境と見分けるため点線） */
     .ward-borders {
       fill: none;
@@ -192,6 +207,9 @@
 
     <!-- Header Actions -->
     <div class="flex items-center gap-2 shrink-0">
+      <!-- この端末の使い方（一般＝見るだけ／管理者＝編集できる） -->
+      <button id="roleBtn" type="button" title="この端末の使い方（一般／管理者）を切り替える"></button>
+
       <!-- 共有の状態（「共有中」なら保存が全員に反映される） -->
       <div id="syncBadge" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-bold whitespace-nowrap bg-slate-50 border-slate-200 text-slate-500" title="共有データに接続しています">
         <span id="syncDot" class="w-2 h-2 rounded-full bg-slate-400 animate-pulse"></span>
@@ -282,6 +300,8 @@
         <svg id="mapSvg" role="img" aria-label="茨城県・栃木県・群馬県・埼玉県・千葉県・東京都の市区町村の地図">
           <g id="zoomLayer">
             <g id="muniLayer"></g>
+            <path id="muniBordersCase" class="muni-borders-case"></path>
+            <path id="wardBordersCase" class="ward-borders-case"></path>
             <path id="muniBorders" class="muni-borders"></path>
             <path id="wardBorders" class="ward-borders"></path>
             <g id="statusLayer"></g>
@@ -300,12 +320,21 @@
           <span id="mapHint">クリックで選択（何もないところで解除）・Shift／Ctrl＋クリックで複数選択</span>
         </div>
 
-        <!-- 左：県でまとめて選択・拠点ピンの表示 -->
-        <div class="absolute left-3 top-14 z-10 w-[122px] bg-white/95 backdrop-blur-sm rounded-xl border border-slate-200 shadow-sm p-2 text-[11px] text-slate-600 space-y-1.5">
-          <p class="font-bold text-slate-700 px-0.5"><i class="fa-solid fa-object-group text-amber-500 mr-1"></i>県で選択</p>
-          <div id="prefSelect" class="space-y-1"></div>
-          <div class="border-t border-slate-100 pt-1.5">
-            <button type="button" id="baseToggle" title="いのうえ工務店の拠点を地図に表示する"></button>
+        <!-- 左：県でまとめて選択・管轄の色の一覧・拠点ピンの表示（長いときは中でスクロール） -->
+        <div class="absolute left-3 top-14 bottom-14 z-10 w-[132px] pointer-events-none">
+          <div class="max-h-full overflow-y-auto pointer-events-auto bg-white/95 backdrop-blur-sm rounded-xl border border-slate-200 shadow-sm p-2 text-[11px] text-slate-600 space-y-2">
+            <div id="prefSelectBox" class="space-y-1.5">
+              <p class="font-bold text-slate-700 px-0.5"><i class="fa-solid fa-object-group text-amber-500 mr-1"></i>県で選択</p>
+              <div id="prefSelect" class="space-y-1"></div>
+            </div>
+            <div class="space-y-1">
+              <p class="font-bold text-slate-700 px-0.5"><i class="fa-solid fa-palette text-indigo-500 mr-1"></i>管轄の色</p>
+              <button type="button" id="colorModeBtn" title="地図を営業管轄の色で塗る"></button>
+              <div id="baseLegend" class="space-y-0.5"></div>
+            </div>
+            <div class="border-t border-slate-100 pt-1.5">
+              <button type="button" id="baseToggle" title="いのうえ工務店の拠点を地図に表示する"></button>
+            </div>
           </div>
         </div>
 
@@ -317,7 +346,7 @@
         </div>
 
         <!-- 凡例・出典 -->
-        <div class="absolute bottom-3 left-3 flex flex-wrap items-center gap-3 bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-slate-200 text-[11px] text-slate-600 shadow-sm pointer-events-none">
+        <div id="mapLegend" class="absolute bottom-3 left-3 flex flex-wrap items-center gap-3 bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-slate-200 text-[11px] text-slate-600 shadow-sm pointer-events-none">
           <span class="flex items-center gap-1.5"><i class="inline-block w-3 h-3 rounded-sm border" style="background:#86efac;border-color:#15803d"></i>施工エリア</span>
           <span class="flex items-center gap-1.5"><i class="inline-block w-3 h-3 rounded-sm border" style="background:#fca5a5;border-color:#b91c1c"></i>エリア外</span>
           <span class="flex items-center gap-1.5"><i class="inline-block w-3 h-3 rounded-sm border" style="background:#f1f5f9;border-color:#94a3b8"></i>未設定</span>
@@ -371,6 +400,9 @@
 
         <!-- Structured Construction Memo Form -->
         <form id="memoForm" class="flex-1 overflow-y-auto p-5 space-y-4">
+
+          <!-- 一般（見るだけ）の端末のときのお知らせ -->
+          <p id="viewerNote" class="hidden text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 leading-relaxed"><i class="fa-regular fa-eye mr-1 text-slate-400"></i>この端末は「一般（見るだけ）」です。内容を変えるときは、右上のボタンから管理者に切り替えてください。</p>
 
           <!-- 施工可否トグルボタン (3択) -->
           <div>
@@ -426,7 +458,8 @@
               <i class="fa-solid fa-location-dot text-indigo-500 mr-1"></i>営業管轄（拠点）
             </label>
             <div class="flex flex-wrap gap-1.5" id="basePills"></div>
-            <p class="text-[10px] text-slate-400 mt-1">管轄する拠点を選んでください（複数可）</p>
+            <p id="baseNone" class="hidden text-xs text-slate-400">—</p>
+            <p id="basePillsHint" class="text-[10px] text-slate-400 mt-1">管轄する拠点を選んでください（複数可）</p>
           </div>
 
           <!-- 特記事項・注意事項枠 -->
@@ -450,10 +483,11 @@
               <button type="button" data-tag="要事前現地調査" class="tag-toggle">+要事前下見</button>
               <button type="button" data-tag="駐車スペース要確認" class="tag-toggle">+駐車場要確認</button>
             </div>
+            <p id="tagNone" class="hidden text-xs text-slate-400">—</p>
           </div>
 
           <!-- Action Buttons -->
-          <div class="pt-2 flex items-center justify-between gap-2 border-t border-slate-100">
+          <div id="memoActions" class="pt-2 flex items-center justify-between gap-2 border-t border-slate-100">
             <button type="button" id="clearCurrentMemoBtn" class="text-xs px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-100 font-medium transition flex items-center gap-1">
               <i class="fa-regular fa-trash-can"></i>
               <span>内容クリア</span>
@@ -592,6 +626,44 @@
     </div>
   </div>
 
+  <!-- この端末の使い方（一般／管理者）の切り替え -->
+  <div id="roleModal" class="fixed inset-0 z-[65] bg-slate-900/40 items-center justify-center p-4" style="display:none">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5">
+      <p class="text-sm font-bold text-slate-900"><i class="fa-solid fa-user-gear text-indigo-500 mr-1"></i>この端末の使い方</p>
+      <p class="text-[11px] text-slate-500 mt-1 leading-relaxed">端末（ブラウザ）ごとに選べます。業者さんなど、見るだけの方は「一般」のままにしてください。</p>
+      <div class="mt-3 space-y-2">
+        <label class="role-opt" data-role="viewer">
+          <input type="radio" name="roleSel" value="viewer" class="mt-1">
+          <span><b class="text-sm text-slate-800">一般（見るだけ）</b><br><span class="text-[11px] text-slate-500">地図と内容を見られます。保存や変更はできません。</span></span>
+        </label>
+        <label class="role-opt" data-role="admin">
+          <input type="radio" name="roleSel" value="admin" class="mt-1">
+          <span><b class="text-sm text-slate-800">管理者（編集できる）</b><br><span class="text-[11px] text-slate-500">施工エリア・管轄・メモを保存できます。パスワードが必要です。</span></span>
+        </label>
+      </div>
+      <!-- 管理者に切り替えるときのパスワード -->
+      <div id="rolePwBox" class="hidden mt-3 space-y-2">
+        <p id="rolePwLead" class="text-[11px] text-slate-600 leading-relaxed"></p>
+        <input type="password" id="rolePw" autocomplete="off" placeholder="パスワード" class="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500">
+        <input type="password" id="rolePw2" autocomplete="off" placeholder="もう一度（確認）" class="hidden w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500">
+      </div>
+      <!-- 管理者の端末から：パスワードの変更 -->
+      <div id="rolePwChangeBox" class="hidden mt-3 border-t border-slate-100 pt-3">
+        <button type="button" id="rolePwChangeToggle" class="text-[11px] text-slate-500 hover:text-slate-800 underline">パスワードを変更する</button>
+        <div id="rolePwChangeFields" class="hidden mt-2 space-y-2">
+          <input type="password" id="roleNewPw" autocomplete="off" placeholder="新しいパスワード（4文字以上）" class="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500">
+          <input type="password" id="roleNewPw2" autocomplete="off" placeholder="もう一度（確認）" class="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500">
+          <p class="text-[10px] text-slate-400">変更すると、ほかの端末の管理者も一度「一般」に戻ります（新しいパスワードで入り直し）。</p>
+        </div>
+      </div>
+      <p id="rolePwErr" class="hidden mt-2 text-[11px] text-rose-600"></p>
+      <div class="mt-5 flex justify-end gap-2">
+        <button type="button" id="roleCancelBtn" class="text-xs px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 font-medium transition">やめる</button>
+        <button type="button" id="roleOkBtn" class="text-xs px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition">切り替える</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Notification -->
   <div id="toast" class="fixed bottom-6 right-6 z-50 max-w-[calc(100%-48px)] bg-slate-900 text-white text-xs px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-2 transform translate-y-16 opacity-0 transition duration-300 pointer-events-none">
     <i class="fa-solid fa-circle-check text-emerald-400"></i>
@@ -645,6 +717,15 @@
     const BASE_BY_ID = {};
     BASES.forEach(b => { BASE_BY_ID[b.id] = b; });
     const SALES_BASES = BASES.filter(b => b.sales !== false);
+    // 管轄の色（いのうえ工務店の施工エリア地図（PDF・2026.06改定）の凡例と同じ。PDFの「F秩父」は本店）
+    const BASE_COLORS = {
+      honten: '#BDD1E9', fukaya: '#F2C286', kumagaya: '#F5EE7E', ageo: '#EEB2B2', higashimatsuyama: '#D1DE91',
+      shobu: '#B69DBC', omiya: '#FFA5FB', kawagoe: '#66B2C5', tokorozawa: '#22AC38', tsurugashima: '#F39800',
+      takasaki: '#82C696', ota: '#005A8A', yoshioka: '#E61673'
+    };
+    const OUT_COLOR = '#C8C9C9';    // 施工範囲外
+    const UNSET_COLOR = '#f1f5f9';  // 管轄も施工可否も未設定
+    BASES.forEach(b => { b.color = BASE_COLORS[b.id] || '#94a3b8'; });
     function basesOf(code) {
       const it = areaData[code];
       return it && Array.isArray(it.bases) ? it.bases.filter(id => BASE_BY_ID[id]) : [];
@@ -791,6 +872,8 @@
       d3.select('#statusLayer').selectAll('path').attr('d', geoPath);
       d3.select('#muniBorders').attr('d', geoPath(MESH_MUNI));
       d3.select('#wardBorders').attr('d', geoPath(MESH_WARD));
+      d3.select('#muniBordersCase').attr('d', geoPath(MESH_MUNI));
+      d3.select('#wardBordersCase').attr('d', geoPath(MESH_WARD));
       d3.select('#prefBorders').attr('d', geoPath(MESH_PREF));
       FEATURES.forEach(f => {
         const p = f.properties;
@@ -943,7 +1026,7 @@
 
     function onMuniClick(code, ev) {
       // Shift／Ctrl（Macは⌘）を押しながらクリック → 複数選択
-      if (!bulkMode && ev && (ev.shiftKey || ev.ctrlKey || ev.metaKey)) {
+      if (isAdmin && !bulkMode && ev && (ev.shiftKey || ev.ctrlKey || ev.metaKey)) {
         const keep = currentSelectedId;
         setBulkMode(true);
         if (keep && keep !== code) bulkSel.add(keep);
@@ -976,7 +1059,17 @@
         const p = f.properties;
         return 'muni st-' + statusOf(p.code) + (isShown(p) ? '' : ' dim');
       });
-      // 施工エリア・エリア外のふちどり
+      // 「管轄の色」がONのときは、担当拠点の色で塗る（施工範囲外はグレー、どちらもまだなら薄いグレー）
+      d3.select('#muniLayer').selectAll('path').style('fill', f => {
+        const p = f.properties;
+        if (colorMode !== 'base' || !isShown(p)) return null;
+        const bs = basesOf(p.code);
+        if (bs.length) return BASE_BY_ID[bs[0]].color;
+        return statusOf(p.code) === 'out' ? OUT_COLOR : UNSET_COLOR;
+      });
+      // 施工エリア・エリア外のふちどり（管轄の色のときは出さない）。境界線は管轄の色のとき二重線に
+      d3.select('#statusLayer').style('display', colorMode === 'base' ? 'none' : null);
+      document.getElementById('mapSvg').classList.toggle('color-base', colorMode === 'base');
       d3.select('#statusLayer').selectAll('path')
         .data(FEATURES.filter(f => statusOf(f.properties.code) !== 'none'), f => f.properties.code)
         .join('path')
@@ -984,6 +1077,213 @@
         .attr('class', f => 'status-line st-' + statusOf(f.properties.code) + (isShown(f.properties) ? '' : ' dim'));
       updateStatsCounter();
       updateLabels();
+      renderBaseLegend();
+    }
+
+    // ===== 管轄の色（左の一覧と、地図の色分け） =====
+    let colorMode = 'base'; // base：管轄の色で色分け（最初はこれ）/ status：施工可否で色分け（この端末に覚えておく）
+    try { colorMode = localStorage.getItem('sekou_area_map_color_mode') === 'status' ? 'status' : 'base'; } catch (e) {}
+    function setColorMode(mode) {
+      colorMode = mode;
+      try { localStorage.setItem('sekou_area_map_color_mode', mode); } catch (e) {}
+      refreshView();
+      renderMapLegend();
+    }
+    function renderBaseLegend() {
+      const counts = {};
+      MUNIS.forEach(p => basesOf(p.code).forEach(id => { counts[id] = (counts[id] || 0) + 1; }));
+      document.querySelectorAll('.base-legend').forEach(b => {
+        const on = baseFilter === b.dataset.base;
+        b.className = 'base-legend w-full flex items-center gap-1.5 px-1.5 py-0.5 rounded-md text-left transition ' +
+          (on ? 'bg-amber-100 text-amber-900 font-bold' : 'hover:bg-slate-100');
+        b.querySelector('.cnt').textContent = counts[b.dataset.base] || '';
+      });
+      const btn = document.getElementById('colorModeBtn');
+      const on = colorMode === 'base';
+      btn.className = 'w-full flex items-center justify-between px-2 py-1 rounded-lg border transition ' +
+        (on ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50');
+      btn.innerHTML = '<span class="whitespace-nowrap">地図に色付け</span><span class="text-[10px] font-bold">' + (on ? 'ON' : 'OFF') + '</span>';
+    }
+    // 地図の左下の凡例（色分けの種類に合わせる）
+    function renderMapLegend() {
+      const sw = (bg, bd, label) => `<span class="flex items-center gap-1.5"><i class="inline-block w-3 h-3 rounded-sm border" style="background:${bg};border-color:${bd}"></i>${label}</span>`;
+      const pin = '<span class="flex items-center gap-1.5"><i class="inline-block w-2.5 h-2.5 rounded-full border border-white" style="background:#F39800;box-shadow:0 0 5px rgba(243,152,0,.9)"></i>拠点</span>';
+      document.getElementById('mapLegend').innerHTML = colorMode === 'base'
+        ? '<span class="font-bold text-indigo-700">管轄の色で表示中</span>' + sw(OUT_COLOR, '#94a3b8', '施工範囲外') + sw(UNSET_COLOR, '#94a3b8', '未設定') + pin
+        : sw('#86efac', '#15803d', '施工エリア') + sw('#fca5a5', '#b91c1c', 'エリア外') + sw('#f1f5f9', '#94a3b8', '未設定') + pin;
+    }
+    // 営業管轄の絞り込み（上のプルダウンと左の一覧のどちらからでも）
+    function setBaseFilter(value) {
+      baseFilter = value;
+      const el = document.getElementById('baseFilter');
+      el.value = value;
+      el.className = 'text-[11px] px-2 py-1.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-emerald-500/20 ' +
+        (value ? 'border-amber-400 bg-amber-50 text-amber-900 font-bold' : 'border-slate-200 bg-slate-50 text-slate-700');
+      refreshView();
+    }
+
+    // ===== 誤操作防止：この端末の使い方（一般＝見るだけ／管理者＝編集できる） =====
+    // 管理者パスワードは暗号（ハッシュ）にして共有データ（sekouAreaMap/config）に置く。
+    // 管理者にした端末には、そのときの暗号を覚えておく。パスワードが変わると、その端末は一般に戻る。
+    const CONFIG_DOC_ID = 'config';
+    const ROLE_KEY = 'sekou_area_map_admin_token';
+    let configDoc = null;
+    let adminPassHash = '';
+    let configLoaded = false;
+    let isAdmin = false;
+    async function hashPass(pw) {
+      const text = 'sekou-area-map:' + pw;
+      if (window.crypto && crypto.subtle) {
+        const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+        return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+      }
+      let h = 5381;
+      for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+      return 'd' + (h >>> 0).toString(16);
+    }
+    function readRoleToken() {
+      try { return localStorage.getItem(ROLE_KEY) || ''; } catch (e) { return ''; }
+    }
+    function writeRoleToken(v) {
+      try {
+        if (v) localStorage.setItem(ROLE_KEY, v);
+        else localStorage.removeItem(ROLE_KEY);
+      } catch (e) {}
+    }
+    function evalRole() {
+      isAdmin = !!adminPassHash && readRoleToken() === adminPassHash;
+      applyRoleUI();
+    }
+    function defaultHint() {
+      return isAdmin
+        ? 'クリックで選択（何もないところで解除）・Shift／Ctrl＋クリックで複数選択'
+        : 'クリックで内容を見る（何もないところで解除）';
+    }
+    // 一般の端末では、編集の入口をすべて隠す
+    function applyRoleUI() {
+      const btn = document.getElementById('roleBtn');
+      btn.className = 'px-2.5 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition whitespace-nowrap ' +
+        (isAdmin ? 'bg-indigo-600 border-indigo-600 text-white hover:bg-indigo-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50');
+      btn.innerHTML = isAdmin
+        ? '<i class="fa-solid fa-user-shield"></i><span class="hidden sm:inline">管理者</span>'
+        : '<i class="fa-regular fa-eye"></i><span class="hidden sm:inline">一般（見るだけ）</span>';
+      if (!isAdmin && bulkMode) setBulkMode(false);
+      document.getElementById('bulkBtn').style.display = isAdmin ? '' : 'none';
+      document.getElementById('prefSelectBox').style.display = isAdmin ? '' : 'none';
+      if (!bulkMode) document.getElementById('mapHint').textContent = defaultHint();
+      document.getElementById('viewerNote').classList.toggle('hidden', isAdmin);
+      document.getElementById('memoActions').style.display = isAdmin ? '' : 'none';
+      document.getElementById('basePillsHint').style.display = isAdmin ? '' : 'none';
+      ['travelFee', 'leadTime', 'partnerOffice', 'memoNotes'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el.dataset.ph === undefined) el.dataset.ph = el.placeholder;
+        el.readOnly = !isAdmin;
+        el.placeholder = isAdmin ? el.dataset.ph : '—';
+        el.classList.toggle('bg-slate-50', !isAdmin);
+        el.classList.toggle('bg-white', isAdmin);
+      });
+      updateStatusButtonsUI(selectedStatus);
+      updateTagPillsUI();
+      updateBasePillsUI();
+    }
+
+    // 切り替えの画面
+    let roleChoice = 'viewer';
+    function openRoleModal() {
+      roleChoice = isAdmin ? 'admin' : 'viewer';
+      ['rolePw', 'rolePw2', 'roleNewPw', 'roleNewPw2'].forEach(id => { document.getElementById(id).value = ''; });
+      document.getElementById('rolePwChangeFields').classList.add('hidden');
+      document.getElementById('rolePwErr').classList.add('hidden');
+      renderRoleModal();
+      document.getElementById('roleModal').style.display = 'flex';
+    }
+    function closeRoleModal() {
+      document.getElementById('roleModal').style.display = 'none';
+    }
+    function renderRoleModal() {
+      document.querySelectorAll('.role-opt').forEach(l => {
+        const on = l.dataset.role === roleChoice;
+        l.querySelector('input').checked = on;
+        l.className = 'role-opt flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ' +
+          (on ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:bg-slate-50');
+      });
+      const needPw = roleChoice === 'admin' && !isAdmin;
+      const first = !adminPassHash;
+      document.getElementById('rolePwBox').classList.toggle('hidden', !needPw);
+      document.getElementById('rolePwLead').textContent = first
+        ? 'まだ管理者パスワードが決まっていません。この端末で決めてください（4文字以上）。決めたパスワードは、社内の管理者だけに伝えてください。'
+        : '管理者パスワードを入力してください。';
+      document.getElementById('rolePw2').classList.toggle('hidden', !first);
+      document.getElementById('rolePwChangeBox').classList.toggle('hidden', !(isAdmin && roleChoice === 'admin'));
+      document.getElementById('roleOkBtn').textContent = isAdmin && roleChoice === 'admin' ? '保存' : '切り替える';
+    }
+    async function submitRole() {
+      const errEl = document.getElementById('rolePwErr');
+      const fail = msg => { errEl.textContent = msg; errEl.classList.remove('hidden'); };
+      errEl.classList.add('hidden');
+      if (roleChoice === 'viewer') {
+        writeRoleToken('');
+        evalRole();
+        closeRoleModal();
+        showToast('この端末を「一般（見るだけ）」にしました');
+        return;
+      }
+      if (!configLoaded || syncMode !== 'cloud' || !configDoc) {
+        fail('共有データにつながってから、もう一度お試しください');
+        return;
+      }
+      try {
+        if (isAdmin) {
+          // 管理者の端末から：パスワードの変更
+          const n1 = document.getElementById('roleNewPw').value;
+          const n2 = document.getElementById('roleNewPw2').value;
+          if (document.getElementById('rolePwChangeFields').classList.contains('hidden') || (!n1 && !n2)) {
+            closeRoleModal();
+            return;
+          }
+          if (n1.length < 4) return fail('新しいパスワードは4文字以上にしてください');
+          if (n1 !== n2) return fail('確認のパスワードが一致しません');
+          const h = await hashPass(n1);
+          await configDoc.set({ adminPassHash: h, passUpdatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          writeRoleToken(h);
+          adminPassHash = h;
+          evalRole();
+          closeRoleModal();
+          showToast('パスワードを変更しました（ほかの端末の管理者は、新しいパスワードで入り直しになります）');
+          return;
+        }
+        const pw = document.getElementById('rolePw').value;
+        if (!adminPassHash) {
+          // 初めて：管理者パスワードを決める（同時に決めた人がいたら、先に決まった方を使う）
+          if (pw.length < 4) return fail('パスワードは4文字以上にしてください');
+          if (pw !== document.getElementById('rolePw2').value) return fail('確認のパスワードが一致しません');
+          const h = await hashPass(pw);
+          let taken = false;
+          await firebase.firestore().runTransaction(t => t.get(configDoc).then(s => {
+            if (s.exists && (s.data() || {}).adminPassHash) { taken = true; return; }
+            t.set(configDoc, { adminPassHash: h, passUpdatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          }));
+          if (taken) {
+            renderRoleModal();
+            return fail('ほかの端末でパスワードが決まりました。そのパスワードを入力してください');
+          }
+          writeRoleToken(h);
+          adminPassHash = h;
+          evalRole();
+          closeRoleModal();
+          showToast('管理者パスワードを決めて、この端末を「管理者」にしました');
+          return;
+        }
+        const h = await hashPass(pw);
+        if (h !== adminPassHash) return fail('パスワードが違います');
+        writeRoleToken(h);
+        evalRole();
+        closeRoleModal();
+        showToast('この端末を「管理者」にしました');
+      } catch (e) {
+        console.error(e);
+        fail('うまくいきませんでした。もう一度お試しください');
+      }
     }
     function updateStatsCounter() {
       let inCount = 0;
@@ -1034,6 +1334,14 @@
       try {
         if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
         sharedDoc = firebase.firestore().collection(SHARED_COLLECTION).doc(SHARED_DOC_ID);
+        // 管理者パスワード（の暗号）。変わったら、この端末が管理者のままでよいか確かめ直す
+        configDoc = firebase.firestore().collection(SHARED_COLLECTION).doc(CONFIG_DOC_ID);
+        configDoc.onSnapshot(snap => {
+          if (!snap.exists && snap.metadata.fromCache) return;
+          adminPassHash = (snap.exists && (snap.data() || {}).adminPassHash) || '';
+          configLoaded = true;
+          evalRole();
+        }, err => console.error(err));
       } catch (e) {
         console.error(e);
         setSyncState('error');
@@ -1088,6 +1396,10 @@
 
     // 保存（changes は { 市町村コード: 設定内容 }）。共有中なら全員に反映される
     function saveAreas(changes, doneMsg) {
+      if (!isAdmin) {
+        showToast('この端末は「一般（見るだけ）」なので保存できません');
+        return false;
+      }
       if (syncMode === 'connecting') {
         showToast('共有データに接続中です。少し待ってからもう一度お試しください');
         return false;
@@ -1161,7 +1473,7 @@
         : '<i class="fa-solid fa-object-group text-amber-500"></i><span class="hidden sm:inline">複数選択</span>';
       document.getElementById('mapHint').textContent = on
         ? 'クリックした市町村が選ばれます（もう一度クリックで外れる・何もないところで全部解除）'
-        : 'クリックで選択（何もないところで解除）・Shift／Ctrl＋クリックで複数選択';
+        : defaultHint();
       resetMultiForm();
       updateDrawerPanels();
     }
@@ -1191,7 +1503,16 @@
         (on ? 'border-indigo-500 bg-indigo-50 text-indigo-800 font-bold' : 'border-slate-200 text-slate-600 hover:bg-slate-50');
     }
     function updateBasePillsUI() {
-      document.querySelectorAll('.base-toggle').forEach(b => { b.className = baseChipClass(selectedBases.has(b.dataset.base), 'base-toggle'); });
+      // 一般の端末では、付いている管轄だけを押せない形で見せる
+      let shown = 0;
+      document.querySelectorAll('.base-toggle').forEach(b => {
+        const on = selectedBases.has(b.dataset.base);
+        b.className = baseChipClass(on, 'base-toggle');
+        b.disabled = !isAdmin;
+        b.style.display = !isAdmin && !on ? 'none' : '';
+        if (on) shown++;
+      });
+      document.getElementById('baseNone').classList.toggle('hidden', isAdmin || shown > 0);
     }
     function updateMultiBasesUI() {
       document.querySelectorAll('.multi-base').forEach(b => { b.className = baseChipClass(multiBases.has(b.dataset.base), 'multi-base'); });
@@ -1385,15 +1706,24 @@
         } else {
           btn.className = base + 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50';
         }
+        // 一般の端末では押せない。今の状態だけをはっきり見せる
+        btn.disabled = !isAdmin;
+        btn.style.opacity = !isAdmin && val !== status ? '.35' : '';
       });
     }
 
     function updateTagPillsUI() {
+      let shown = 0;
       document.querySelectorAll('.tag-toggle').forEach(btn => {
-        btn.className = selectedTags.has(btn.dataset.tag)
+        const on = selectedTags.has(btn.dataset.tag);
+        btn.className = on
           ? 'tag-toggle text-[11px] px-2.5 py-1 rounded-full border border-teal-500 bg-teal-50 text-teal-800 font-bold transition'
           : 'tag-toggle text-[11px] px-2.5 py-1 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50 transition';
+        btn.disabled = !isAdmin;
+        btn.style.display = !isAdmin && !on ? 'none' : '';
+        if (on) shown++;
       });
+      document.getElementById('tagNone').classList.toggle('hidden', isAdmin || shown > 0);
     }
 
     function setFilterTabs() {
@@ -1579,11 +1909,38 @@
       baseFilterEl.innerHTML = '<option value="">拠点：すべて</option>' +
         SALES_BASES.map(b => `<option value="${b.id}">拠点：${b.full}</option>`).join('') +
         '<option value="__none">拠点：管轄が未設定</option>';
-      baseFilterEl.addEventListener('change', () => {
-        baseFilter = baseFilterEl.value;
-        baseFilterEl.className = 'text-[11px] px-2 py-1.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-emerald-500/20 ' +
-          (baseFilter ? 'border-amber-400 bg-amber-50 text-amber-900 font-bold' : 'border-slate-200 bg-slate-50 text-slate-700');
-        refreshView();
+      baseFilterEl.addEventListener('change', () => setBaseFilter(baseFilterEl.value));
+
+      // 左の「管轄の色」の一覧（押すと、その拠点の管轄だけを表示。もう一度押すと元に戻す）
+      document.getElementById('baseLegend').innerHTML = SALES_BASES.map(b =>
+        `<button type="button" class="base-legend" data-base="${b.id}" title="${b.full}（押すと、この拠点の管轄だけを表示）">` +
+        `<i class="inline-block w-3 h-3 shrink-0 rounded-sm border border-black/10" style="background:${b.color}"></i>` +
+        `<span class="truncate">${b.name}</span><span class="cnt ml-auto text-[10px] font-normal text-slate-400"></span></button>`
+      ).join('') +
+        `<div class="flex items-center gap-1.5 px-1.5 py-0.5 text-slate-500"><i class="inline-block w-3 h-3 shrink-0 rounded-sm border border-black/10" style="background:${OUT_COLOR}"></i><span>施工範囲外</span></div>`;
+      document.querySelectorAll('.base-legend').forEach(b => {
+        b.onclick = () => setBaseFilter(baseFilter === b.dataset.base ? '' : b.dataset.base);
+      });
+      document.getElementById('colorModeBtn').onclick = () => setColorMode(colorMode === 'base' ? 'status' : 'base');
+
+      // この端末の使い方（一般／管理者）
+      document.getElementById('roleBtn').onclick = openRoleModal;
+      document.querySelectorAll('.role-opt').forEach(l => {
+        l.addEventListener('click', (e) => {
+          e.preventDefault();
+          roleChoice = l.dataset.role;
+          document.getElementById('rolePwErr').classList.add('hidden');
+          renderRoleModal();
+        });
+      });
+      document.getElementById('roleCancelBtn').onclick = closeRoleModal;
+      document.getElementById('roleOkBtn').onclick = submitRole;
+      document.getElementById('rolePwChangeToggle').onclick = () => document.getElementById('rolePwChangeFields').classList.toggle('hidden');
+      ['rolePw', 'rolePw2', 'roleNewPw', 'roleNewPw2'].forEach(id => {
+        document.getElementById(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') submitRole(); });
+      });
+      document.getElementById('roleModal').addEventListener('click', (e) => {
+        if (e.target.id === 'roleModal') closeRoleModal();
       });
 
       // 営業管轄の拠点ボタン（右の枠・複数選択の枠）
@@ -1652,7 +2009,7 @@
       // 保存
       document.getElementById('memoForm').addEventListener('submit', (e) => {
         e.preventDefault();
-        if (!currentSelectedId) return;
+        if (!currentSelectedId || !isAdmin) return;
         const dateStr = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' });
         const entry = {
           status: selectedStatus,
@@ -1716,6 +2073,8 @@
       areaData = readLocal() || {};
       setupMap();
       setupInteractions();
+      applyRoleUI();       // 最初は「一般」。共有データのパスワードを確かめてから管理者になる
+      renderMapLegend();
       refreshView();
       connectShared();
     });
